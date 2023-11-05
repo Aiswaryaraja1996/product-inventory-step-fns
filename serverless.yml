@@ -1,0 +1,157 @@
+service: product-inventory-management
+
+frameworkVersion: "3"
+
+provider:
+  name: aws
+  runtime: python3.9
+  region: us-east-2 #region in which the aws profile is configured
+  iamRoleStatements:
+    #adding statements for dynamodb tables
+    - Effect: Allow
+      Action: dynamodb:*
+      Resource: arn:aws:dynamodb:us-east-2:752671163579:table/Products
+    - Effect: Allow
+      Action: dynamodb:*
+      Resource: arn:aws:dynamodb:us-east-2:752671163579:table/Users
+    - Effect: Allow
+      Action: dynamodb:*
+      Resource: arn:aws:sns:us-east-2:752671163579:dispatchProductOrder
+    - Effect: Allow
+      Action: states:*
+      Resource: arn:aws:iam::752671163579:role/product-inventory-managemen-ProductCheckOutFlowRole-9KvRF1LyfLnQ
+
+#lambda functions
+functions:
+  checkInventoryFn:
+    handler: handler.checkInventoryFn
+  calculateProductTotalFn:
+    handler: handler.calculateProductTotalFn
+  redeemCouponFn:
+    handler: handler.redeemCouponFn
+  restoreCouponFn:
+    handler: handler.restoreCouponFn
+  billProductFn:
+    handler: handler.billProductFn
+  restoreDepositFn:
+    handler: handler.restoreDepositFn
+  restoreProductQtyFn:
+    handler: handler.restoreProductQtyFn
+  sqsWorkerFn:
+    handler: handler.sqsWorkerFn
+    events:
+      - sqs:
+          arn: arn:aws:sqs:us-east-2:752671163579:OrderQueue
+          #lambda will pick only one message from the queue
+          batchSize: 1
+
+#Step functions
+stepFunctions:
+  stateMachines:
+    productCheckOutFlow:
+      name: productCheckOutFlow
+      definition:
+        StartAt: CheckProductInventory #starting state
+        States:
+          CheckProductInventory: #checks for whether the product is in the inventory
+            Type: Task
+            Resource: #defining the lambda function
+              Fn::GetAtt: [checkInventoryFn, Arn]
+            Next: CalculateProductTotal #next state
+            Catch: #Catching the errors
+              - ErrorEquals: [ProductNotFoundError] #if the product is not in the inventory
+                Next: ProductNotFoundError
+              - ErrorEquals: [ProductOutOfStockError] #if the product is out of stock
+                Next: ProductOutOfStockError
+            ResultPath: "$.productInfo" #appends the results with the input
+          CalculateProductTotal:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [calculateProductTotalFn, Arn]
+            ResultPath: "$.billInfo"
+            Next: IsCouponAvailable
+          ProductNotFoundError:
+            Type: Pass
+            Result: "Product Not Found!"
+            End: true
+          ProductOutOfStockError:
+            Type: Pass
+            Result: "Product Out Of Stock!"
+            End: true
+          IsCouponAvailable:
+            Type: Choice #step function type choice
+            Choices:
+              - Variable: $.isCoupon
+                BooleanEquals: true
+                Next: RedeemCoupon
+            Default: BillProduct
+          RedeemCoupon:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [redeemCouponFn, Arn]
+            ResultPath: "$.billInfo"
+            Next: BillProduct
+            Catch:
+              - ErrorEquals: [CouponNotRedeemedError]
+                Next: CouponNotRedeemedError
+          CouponNotRedeemedError:
+            Type: Pass
+            Result: "Coupon cannot be redeemed!"
+            End: true
+          BillProduct:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [billProductFn, Arn]
+            ResultPath: "$.billingStatus"
+            Catch:
+              - ErrorEquals: [NoSufficientMoneyError]
+                ResultPath: "$.billingError"
+                Next: RestoreCoupon
+            Next: PrepareProductOrder
+          RestoreCoupon:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [restoreCouponFn, Arn]
+            End: true
+          #The below is the integration of SQS with step function
+          #We assign a lambda worker that listens to the message in the queue and consumes it
+          PrepareProductOrder: #prepare order is callback back pattern with SQS
+            Type: Task
+            Resource: arn:aws:states:::sqs:sendMessage.waitForTaskToken
+            Parameters:
+              QueueUrl: https://sqs.us-east-2.amazonaws.com/752671163579/OrderQueue
+              MessageBody:
+                Input.$: "$" #attach the entire message input created so far in state machine
+                Token.$: "$$.Task.Token" #two dollar signs indicate the context of the state machine
+            ResultPath: "$.orderStatus"
+            Catch:
+              - ErrorEquals: [NoCourierServiceAvailable]
+                ResultPath: "$.orderError"
+                Next: RefundCustomer
+            Next: DispatchProductOrder
+          RefundCustomer:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [restoreDepositFn, Arn]
+            Next: RestoreProductQty
+          RestoreProductQty:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [restoreProductQtyFn, Arn]
+            Next: RestoreCoupon
+          #The below is an integration with SNS service
+          DispatchProductOrder:
+            Type: Task
+            Resource: arn:aws:states:::sns:publish
+            Parameters:
+              TopicArn: arn:aws:sns:us-east-2:752671163579:dispatchProductOrder
+              Message.$: "$"
+            Next: Dispatched
+          Dispatched:
+            Type: Pass
+            Result: "Your order will be dispatched in 24 hours!"
+            End: true
+
+#plugins installed
+plugins:
+  - serverless-step-functions
