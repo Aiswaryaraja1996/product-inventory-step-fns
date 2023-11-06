@@ -19,7 +19,7 @@ provider:
       Resource: arn:aws:sns:us-east-2:752671163579:dispatchProductOrder
     - Effect: Allow
       Action: states:*
-      Resource: arn:aws:iam::752671163579:role/product-inventory-managemen-ProductCheckOutFlowRole-9KvRF1LyfLnQ
+      Resource: arn:aws:states:us-east-2:752671163579:stateMachine:productCheckOutFlow
 
 #lambda functions
 functions:

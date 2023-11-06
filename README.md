@@ -80,3 +80,40 @@ serverless plugin install -n serverless-python-requirements
 ```
 
 Running the above will automatically add `serverless-python-requirements` to `plugins` section in your `serverless.yml` file and add it as a `devDependency` to `package.json` file. The `package.json` file will be automatically created if it doesn't exist beforehand. Now you will be able to add your dependencies to `requirements.txt` file (`Pipfile` and `pyproject.toml` is also supported but requires additional configuration) and they will be automatically injected to Lambda package during build process. For more details about the plugin's configuration, please refer to [official documentation](https://github.com/UnitedIncome/serverless-python-requirements).
+
+
+### Other Importand commands and errors encountered during development
+
+list default profile : 
+```bash
+aws configure list
+```
+list other profile :  
+```bash
+aws configure list --profile <profile_name>
+```
+list all profiles : 
+```bash
+aws configure list-profiles
+```
+to change the default profile : 
+```bash
+setx AWS_DEFAULT_PROFILE <profile_name>
+```
+
+[ERROR] ClientError: 
+An error occurred (AccessDeniedException) when calling the SendTaskFailure operation: 
+User: arn:aws:sts::752671163579:assumed-role/product-inventory-management-dev-us-east-2-lambdaRole/product-inventory-management-dev-sqsWorkerFn 
+is not authorized to perform: states:SendTaskFailure on resource: arn:aws:states:us-east-2:752671163579:stateMachine:productCheckOutFlow 
+because no identity-based policy allows the states:SendTaskFailure action
+
+--- For this error we need to assign policy for the particular role mentioned in the error (sns,sqs,step functions)
+
+Integration request template for calling step functions from AWS API gateway
+```
+ #set($input = $input.json('$'))
+  {
+     "input": "$util.escapeJavaScript($input).replaceAll("\\'", "'")",
+    "stateMachineArn": "arn:aws:states:us-east-2:752671163579:stateMachine:productCheckOutFlow"
+  }
+```
